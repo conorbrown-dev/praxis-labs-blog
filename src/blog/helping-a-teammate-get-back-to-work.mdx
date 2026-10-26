@@ -1,3 +1,52 @@
-Traceback (most recent call last):
-  File "<stdin>", line 6, in <module>
-AssertionError
+---
+title: "Helping a Teammate Get Back to Work"
+description: "Following an Azure Key Vault startup failure through credentials, permissions, and a shared fix for the development team."
+pubDate: 2026-10-26
+---
+# Helping a Teammate Get Back to Work
+
+A coworker asked me to help troubleshoot an application that wouldn't start locally. IT had recently updated some certificates as part of a security response, and afterward our local development setup could no longer access Azure Key Vault.
+
+The application reads secrets from Key Vault during startup and at runtime, so losing that access meant we couldn't get very far.
+
+I reviewed the error and stack trace and found that the application was trying to authenticate using a certificate from the Windows certificate store. That was our existing authentication mechanism, and the certificate it depended on was now unusable.
+
+The immediate problem was getting my coworker working again. But we were also moving our local repositories into Windows Subsystem for Linux (WSL). Keeping local development tied to the Windows certificate store was something we were going to have to address anyway.
+
+## The code was only part of the fix
+
+I added `AzureCliCredential` as a supported authentication mechanism for local development. That gave the application a way to use the developer's Azure CLI sign-in instead of the certificate.
+
+I sent the change to my coworker, she applied it locally, and we tried again.
+
+This time, it failed with a permissions error.
+
+A different error can be useful. It gave us a reason to look at which identity was now accessing Key Vault and what that identity was allowed to do.
+
+The certificate had authenticated an identity that already had access. My coworker's own account didn't have that access. Switching credentials changed the identity making the request; it didn't transfer the original identity's permissions.
+
+That's the distinction between authentication and authorization: proving who you are and being allowed to perform the operation. Both had to be in place for this change to work.
+
+## Solving it for the team
+
+At that point, fixing access for one person would leave everyone else to run into the same problem.
+
+I reached out to my manager and asked him to arrange the read access our team members needed. Once the permission grants were confirmed, I asked my coworker to create a Software Quality work item for the code change so we could get it into the shared codebase.
+
+The code change and permission grants were parts of the same solution. Either one by itself would still leave developers blocked.
+
+The work item also mattered. Sending someone a local fix helps them move forward, but it leaves a gap until that change becomes part of the setup everyone uses. We needed a shared change we could track through completion.
+
+This also connected the immediate troubleshooting to our WSL move. We had an opportunity to address an existing development dependency while helping someone with the problem in front of them.
+
+## The part of the job I enjoy
+
+There wasn't a particularly large code change here. The work was in following the problem across application code, developer tooling, identity, and permissions, then involving the people who could help with each part.
+
+My coworker brought the issue forward and tried the change. My manager helped get access arranged. We had a path to bring the code fix to the rest of the team.
+
+I like being able to help with that. Someone is trying to get their work done, something is in the way, and I can spend some time working through it with them.
+
+And if we're already working through it, I want us to look a little further. Who else is going to hit this? Does the fix fit where our development environment is headed? What still needs to happen before everyone benefits from it?
+
+Those are practical questions. They help us turn the time spent troubleshooting into something useful for the next person, too.
