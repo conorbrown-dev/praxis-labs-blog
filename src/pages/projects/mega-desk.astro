@@ -1,0 +1,52 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="Mega Desk — AI Agent Orchestration | Conor Brown" description="How I built a desktop agent harness connecting Claude and Codex to Azure DevOps, isolated Git worktrees, persistent sessions, and human-reviewed delivery.">
+<main class="article">
+<p class="eyebrow">Project walkthrough · Applied AI engineering</p>
+<h1>Mega Desk</h1>
+<p class="lead">I built a desktop agent harness that connects Claude and Codex to the work my team actually delivers: sprint priorities, implementation, pull-request reviews, review comments, and merge conflicts. My teammates use it daily.</p>
+<div class="actions"><a class="button primary" href="#orchestration">Explore the agent architecture ↓</a><a class="button" href="/projects">All projects</a></div>
+<p class="note">Mega Desk is the Electron desktop application used by my team. This walkthrough draws on its sanitized source; Giga Desk is a separate web application.</p>
+
+<h2>Making agents part of the delivery workflow</h2>
+<p>A coding agent needs more than a prompt. It needs the right repository, branch, work-item context, execution environment, and a clear way to hand its results back to a person. I built Mega Desk to keep those concerns together instead of repeatedly assembling them across a backlog, terminal, editor, and pull-request page.</p>
+<p>The application combines dependency-aware sprint priorities, a board, multi-repository PR management, local branch management, reporting, and agent execution. The prioritization service uses explicit rules and exposes its reasons: it considers work already in progress, downstream dependencies, and unmerged feature PRs. That ranking supplies context for agent handoff; it is not itself an LLM decision.</p>
+
+<h2 id="orchestration">One workflow, two execution providers</h2>
+<p>The orchestration layer models a run independently of its provider. Claude executes through the Claude Agent SDK in Electron's main process. Codex executes as a child process through its CLI, with newline-delimited JSON events parsed into application events. Both feed the same run-monitoring interface, while retaining provider-specific authentication and execution options.</p>
+<ul>
+<li><strong>Task context:</strong> work-item descriptions, acceptance criteria, PR context, and review threads become purpose-specific prompts.</li>
+<li><strong>Run lifecycle:</strong> runs have persisted status, events, result summaries, and controls for cancellation, restart, and archival.</li>
+<li><strong>Live visibility:</strong> text and tool activity stream to the renderer while events are also saved locally for later inspection.</li>
+<li><strong>Structured results:</strong> review output is parsed into findings with severity, file, and line context so a person can inspect findings and post them to Azure DevOps.</li>
+</ul>
+<p>The provider abstraction does not imply identical capabilities. Persistent conversation resumption is implemented for Claude; the Codex adapter launches CLI executions and consumes their event stream.</p>
+
+<h2>Context belongs to a branch</h2>
+<p>I persist Claude conversation identifiers alongside the repository, target, workflow purpose, working directory, and branch. Implementation, PR review, and comment resolution therefore have distinct contexts. Before resuming a conversation, the application checks the current branch. A mismatch supersedes the stored conversation so an agent does not silently carry one branch's assumptions into another.</p>
+<p>If Claude reports that a saved conversation no longer exists, the adapter retries as a new conversation. This handles a provider-session failure without pretending that the previous context was recovered.</p>
+
+<h2>Isolating changes and handling concurrent work</h2>
+<p>Implementation and PR-comment fixes use managed Git worktrees: separate working directories backed by the same repository. A work-item worktree can be retained after PR creation so follow-up work continues on the same branch. Comment resolutions use isolated worktrees, and restart logic distinguishes those managed directories from the primary checkout.</p>
+<p>The delivery boundary also handles other people changing the remote branch. Resolution pushes serialize accepts targeting the same branch, fetch current remote state, incorporate intervening commits, and retry when the branch moves between fetch and push. The resolution path refuses to recreate a source branch that has disappeared from the remote.</p>
+<p>Those details matter because the unit of work is a shared branch with a changing history. An agent finishing its local edit does not establish that its result is ready to push.</p>
+
+<h2>Human review is a separate step</h2>
+<p>The Agent Runs interface presents changed files and a code-diff workspace before actions such as accepting a resolution, committing and pushing it, or creating a PR. Review findings can be analyzed first and handed to an implementation run when a change is warranted. PR-thread analysis can also re-check the remote branch before deciding whether a comment still applies.</p>
+<p>These are workflow controls, not a claim of complete agent isolation. Analysis and review prompts instruct the agent not to edit or publish, but provider execution permissions remain configurable. Codex normally uses a workspace-write sandbox; the optional auto-approval setting enables broader access. Claude uses its SDK permission modes. Normal code review and repository validation remain necessary.</p>
+
+<h2>Desktop architecture and data boundaries</h2>
+<ul>
+<li><strong>Interface:</strong> React, TypeScript, Zustand, Tailwind CSS, and Monaco for code inspection.</li>
+<li><strong>Host:</strong> Electron with a preload API connecting the renderer to main-process services through IPC.</li>
+<li><strong>Persistence:</strong> SQLite and Drizzle store settings, run history, events, conversation metadata, and review state locally.</li>
+<li><strong>Integrations:</strong> Azure DevOps APIs, local Git, Claude Agent SDK, Codex CLI, and a CodeRabbit CLI adapter for local review.</li>
+</ul>
+<p>Keeping Git operations, provider execution, and database access in main-process services gives the interface a defined application API. It also keeps the orchestration model independent of a particular screen. Local persistence avoids requiring a hosted orchestration backend, although Azure DevOps and the selected AI provider still require their own connections.</p>
+
+<h2>Evidence and engineering limits</h2>
+<p>The sanitized source includes focused tests for dependency handling and Git resolution delivery. The Git tests cover concurrent accepts, intervening reviewer changes, and a source branch deleted from the remote. The project also includes Electron end-to-end tests and packaging configuration. These describe implemented test coverage, not a claim that every provider interaction or installer was independently verified for this case study.</p>
+<p>The architectural work spans provider adapters, context lifecycle, process supervision, persistent execution history, Git concurrency, and a review-to-delivery workflow. Daily teammate use demonstrates practical adoption. Measuring delivery time, review quality, and failure recovery is the next step toward quantifying that impact.</p>
+</main>
+</Layout>

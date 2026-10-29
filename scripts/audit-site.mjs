@@ -13,7 +13,7 @@ const routes = [
   '/posts/modernizing-workflow-rules-with-ddd',
   '/posts/azure-modernization-without-big-bang-rewrite',
   '/posts/product-line-transition-system-design',
-  '/projects/career-desk', '/projects/pathway', '/projects/theoria',
+  '/projects/mega-desk', '/projects/career-desk', '/projects/pathway', '/projects/theoria',
   '/projects/mollys-learning-arcade', '/projects/praxis-studio'
 ];
 const architecturePages = [
