@@ -23,7 +23,7 @@ import Layout from '../layouts/Layout.astro';
 <li>Supported a product-line transition involving catalog identity, component modeling, pricing, drawings, indexing, and administrative tooling.</li>
 <li>Modernized CI/CD and test workflows, including Playwright-based regression coverage; codified engineering standards in a CLAUDE.md reference guide.</li>
 </ul>
-<h3>IXOPAY <span>June 2021–April 2025</span></h3><p class="role">Senior Software Engineer</p><ul>
+<h3 class="page-two-start">IXOPAY <span>June 2021–April 2025</span></h3><p class="role">Senior Software Engineer</p><ul>
 <li>Built payment-related microservices including a containerized Card Account Updater to address subscription churn caused by expiring payment credentials.</li>
 <li>Engineered asynchronous API usage telemetry with Azure Service Bus and a 99.9% delivery SLA for billing-related data.</li>
 <li>Introduced integration-test infrastructure and secure runtime configuration patterns across cloud services.</li>
@@ -40,5 +40,5 @@ import Layout from '../layouts/Layout.astro';
 <style>
 .resume-page{max-width:860px!important;color:var(--text);padding-top:32px!important}.resume-toolbar{display:flex;align-items:center;justify-content:space-between}.resume-heading{border-bottom:2px solid var(--accent);margin-top:20px}.resume-heading h1{font-size:2.8rem;margin-bottom:0}.resume-heading p{margin:.35rem 0}.resume-page section{margin:25px 0}.resume-page h2{font-size:1.25rem;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:5px}.resume-page h3{font-size:1.1rem;margin:18px 0 0}.resume-page h3 span{float:right;font-weight:400;font-size:.85rem;color:var(--muted)}.resume-page p,.resume-page li{font-size:.93rem;line-height:1.5}.resume-page ul{padding-left:20px}.resume-page a{text-decoration:underline}.role{margin:0;color:var(--muted)}@media print{@page{size:letter;margin:.5in}html,body{background:#fff!important;color:#111!important;color-scheme:light!important}.site-header,.site-footer,.resume-toolbar{display:none!important}.page-shell main{width:100%;padding:0!important}.resume-page,.resume-page *{color:#111!important;box-shadow:none!important}.resume-page{max-width:none!important}.resume-page section{margin:12px 0;break-inside:auto}.resume-page h1{font-size:26pt}.resume-page h2{font-size:12pt;border-color:#666}.resume-page h3{font-size:10.5pt;break-after:avoid}.resume-page li{break-inside:avoid}.resume-page p,.resume-page li{font-size:9.5pt;line-height:1.32}.resume-page ul{margin:5px 0}.resume-page a{text-decoration:none}.resume-heading{border-color:#555}.resume-page h3 span{color:#333!important}}
 </style>
-<style is:global>@media print{header.site-header,footer.site-footer{display:none!important} .resume-page ul{list-style:disc!important}}</style>
+<style is:global>@media print{header.site-header,footer.site-footer{display:none!important} .resume-page .page-two-start{break-before:page} .resume-page ul{list-style:disc!important}}</style>
 </Layout>
