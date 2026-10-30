@@ -1,0 +1,79 @@
+---
+title: "When My AI Coding Agent Went Offline, I Realized How Much Engineering Judgment I'd Outsourced"
+description: "A two-day outage exposed the risks of depending on AI-generated code without deliberate review—and changed how I use coding agents."
+---
+# When My AI Coding Agent Went Offline, I Realized How Much Engineering Judgment I'd Outsourced
+
+*AI-assisted development made me faster. Losing access to it for two days made me question what I was trading for that speed.*
+
+Our security system disabled my Claude environment after it ran PowerShell scripts during an architectural modernization of two legacy applications.
+
+It took two days to restore access, and I lost a lot of my session context. My initial reaction was panic—not because I couldn't code without Claude, but because I'd planned my sprint around the throughput AI assistance had enabled.
+
+That was the first warning sign.
+
+## Back to the IDE
+
+For the first time in a couple of months, I opened my IDE and hand-wrote a migration from an older vertical-slice implementation into our newer Domain-Driven Design (DDD) flow.
+
+The work was straightforward. What surprised me was how deliberately I considered the boundaries, business behavior, failure modes, and tests.
+
+Where should the responsibility live? Which invariants must remain true? What happens when persistence fails? How do we prove that the new flow preserves what the business expects?
+
+I knew to ask these questions. But I'd become less discerning about the decisions I accepted when an agent was doing the implementation.
+
+## Productivity is not understanding
+
+The productivity gains from AI were real. So was the risk of accepting plausible code without examining its assumptions.
+
+A build can pass while an implementation violates a business rule. Tests can pass while missing the failure that matters. An architectural change can look tidy in a diff while introducing a second, conflicting path for business behavior.
+
+And if a teammate asks how something I've “built” works, I don't want to discover the answer alongside them because I never reviewed the output.
+
+That isn't a problem unique to AI. It's a problem of engineering ownership.
+
+## A dependency without a fallback
+
+I thought of relying on someone else for a ride to work. Everything works until that person can't pick you up. Then your ability to do your job depends on a service you don't control.
+
+My sprint planning had developed a similar dependency. An external tool going away for two days shouldn't mean my ability to make progress goes away with it.
+
+The lesson wasn't to stop using AI. It was to preserve my ability to reason about and continue the work without it.
+
+## Would you approve a teammate's PR without reading it?
+
+Some engineers advocate accepting increasingly autonomous agent output without inspecting every change. I understand the appeal: review can become a bottleneck.
+
+But risk matters. A small presentational change and a modification to authorization, persistence, financial rules, or distributed processing do not deserve the same level of scrutiny.
+
+I wouldn't approve a teammate's pull request without understanding its implications. I don't want to lower that standard because the author is an AI agent.
+
+**Implementation can be delegated. Accountability cannot.**
+
+## What I built instead: MegaDesk
+
+I took the experience and built MegaDesk, a desktop tool to put a deliberate review step between agent-generated changes and my acceptance of them.
+
+The workflow lets me inspect changes at the file and line level and explicitly mark what I've reviewed. I can continue using Claude for implementation and small features, but the review is no longer something I want to casually skip.
+
+The tool doesn't make me responsible by itself. I can still click “Mark Reviewed” a dozen times without reading a thing. What it does is make review a visible, intentional part of the workflow.
+
+That's a useful distinction: tooling can support good judgment, but it cannot substitute for it.
+
+## Five practices I'd recommend
+
+1. **Understand the change before accepting it.** Be able to explain the responsibilities, data flow, assumptions, and important tradeoffs.
+2. **Test behavior, not just compilation.** Identify failure modes, boundaries, and business invariants. Ask what the tests *don't* prove.
+3. **Review proportionally to risk.** Domain rules, authorization, persistence, and cross-service contracts warrant deeper examination than routine changes.
+4. **Keep a fallback.** Maintain enough understanding, documentation, and local tooling to make progress when the agent is unavailable.
+5. **Be able to explain what you've built.** Shared understanding is part of maintainability and technical leadership.
+
+## The lesson I didn't expect
+
+I still use Claude. I still believe agentic development can dramatically improve how we build software.
+
+But those two days reminded me that writing code is only part of engineering. The harder work is understanding the problem, preserving business behavior, anticipating failure, and owning the result long after the implementation is finished.
+
+**The danger isn't simply that AI will replace engineers. It's that we may stop exercising the judgment that makes us valuable.**
+
+I don't want to find out I've crossed that line only when the tools stop working.
