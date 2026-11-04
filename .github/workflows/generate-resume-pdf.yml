@@ -7,12 +7,22 @@ on:
       - 'public/**'
       - 'package*.json'
       - '.github/workflows/generate-resume-pdf.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/pages/resume.astro'
+      - 'scripts/generate-resume-pdf.mjs'
+      - '.github/workflows/generate-resume-pdf.yml'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   pdf:
     runs-on: ubuntu-latest
+    # Playwright's official image ships Chromium and its system libraries, so the
+    # job no longer depends on which Ubuntu version "ubuntu-latest" points at.
+    # Keep this tag in step with the playwright version installed below.
+    container: mcr.microsoft.com/playwright:v1.56.1-noble
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -20,11 +30,10 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Install site and PDF browser dependencies
+      - name: Install site dependencies and Playwright library
         run: |
           npm ci
           npm install --no-save --package-lock=false playwright@1.56.1
-          npx playwright install --with-deps chromium
       - name: Build the site and print the actual résumé page
         run: |
           npm run build
@@ -35,3 +44,16 @@ jobs:
         with:
           name: portfolio-resume-pdf
           path: public/conor-brown-resume.pdf
+      - name: Commit regenerated PDF back to the branch
+        if: github.event_name != 'pull_request'
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/conor-brown-resume.pdf
+          if git diff --cached --quiet; then
+            echo "PDF unchanged; nothing to commit."
+          else
+            git commit -m "Regenerate résumé PDF"
+            git push
+          fi
