@@ -1,0 +1,64 @@
+---
+title: "I Was Sure 80% Coverage Meant Safe Refactors. My Manager Disagreed."
+description: "A disagreement about excluding dead code from test coverage, the assumption I didn't know I was making, and why a metric is only useful while people can trust it."
+pubDate: 2026-11-09
+---
+# I Was Sure 80% Coverage Meant Safe Refactors. My Manager Disagreed.
+
+Our team has a goal of reaching 80% test coverage on one of our applications. Last week I made a case for changing how that coverage was measured. My manager said no.
+
+I was very sure I was right. By the next day, I'd realized my argument rested on an assumption I hadn't checked, and I came away agreeing with him on the part that mattered most.
+
+## The disagreement
+
+Part of the application had a set of legacy TypeScript files. They were no longer used to generate the JavaScript the application actually runs, and they had no test coverage. I'd confirmed that the tests and the affected UI flow worked fine with the TypeScript removed entirely.
+
+Those files were about a third of the gap between our current coverage and 80%.
+
+So I proposed excluding them from the coverage calculation in Sonar. The exclusion would only apply to coverage, not to security or other analysis. To me it seemed obvious. The code wasn't part of the build output, nobody was going to change it, and counting it made our coverage number look worse than the code we actually depend on.
+
+My manager disagreed. He didn't want anyone spending time adding tests to that area. But he also didn't want to change the coverage definition, because that would make the number stop describing reality. Whether code is covered is a fact, he said, whether or not we care about that code. If we ever got stuck just below 80% and the only way up was testing that legacy area, we'd revisit the goal itself, not the measurement.
+
+I pushed back. I asked whether coverage really mattered for dead code. I argued that 80% wasn't an arbitrary number. I saw it as the threshold for being able to make changes safely without broken behavior and hotfixes, and a third of our gap was code that had nothing to do with safe changes.
+
+He answered that the purpose of the goal was to drive a behavior, adding tests, not to hit a number.
+
+## Watermelon metrics
+
+He also gave me a term I hadn't heard before: **watermelon metrics**. Green on the outside, red on the inside.
+
+It's what happens when a team adjusts a measurement until it hits the target. The dashboard looks healthy, but the number no longer reflects the thing it was supposed to measure. Once people notice, they stop trusting the metric, and then it's useless even when it's accurate.
+
+My exclusion would have been honest about what it did. It would have been documented, limited to coverage, and applied to code that really wasn't in use. But it would still have moved the number toward the goal by changing what we counted rather than by adding tests. That's the first step toward a watermelon, even with good intentions.
+
+## What I had wrong
+
+The conversation ended there for the day. I'd said I'd accept whatever he decided, but I was still sure my reasoning was sound.
+
+When we talked the next day, I realized where we'd been talking past each other. I'd assumed 80% was a firm bar he had set: a standard the codebase had to meet before refactoring was considered safe. That assumption shaped my whole argument. If 80% is the definition of "safe to change," then dead code dragging the number down looks like noise in a safety measurement.
+
+But that isn't what the goal was. It was a target meant to get us writing tests, and to give us a way to see progress. Once I understood that, his position made a lot more sense, and mine made less.
+
+We ended up agreeing on something more useful than either starting position. 80% is a reasonable goal, but it isn't an absolute measure of whether a refactor is safe. A single coverage percentage treats every line of code as equally important, and they aren't.
+
+## What coverage doesn't tell you
+
+If the real question is "can we change this code without breaking things," overall coverage is only one signal. Other ways of looking at it can tell you more:
+
+- **Bug hot spots.** Where have defects and hotfixes actually come from? Coverage in those areas matters more than coverage in code that has been stable for years.
+- **The most impactful code.** Some paths handle money, permissions, or data that's hard to fix once it's wrong. Others format a label. A failure in one costs far more than a failure in the other.
+Under that view, the legacy TypeScript barely matters either way. It isn't a hot spot, it isn't high impact, and nothing runs it. Leaving it in the number doesn't hurt anything, and taking it out wouldn't have made our refactors any safer.
+
+## What I'm taking from it
+
+I was confident, and I had reasons. Most of the facts I brought were correct. The code really was unused, and it really was a third of the gap. What was wrong was the frame I'd put around those facts, and I couldn't see that from inside my own argument.
+
+A few things I want to remember:
+
+**Check what a goal is for before arguing about how it's measured.** I spent my energy on the measurement without confirming the purpose. One question at the start would have changed the whole conversation.
+
+**A metric is only worth something while people trust it.** Keeping the number honest, even when it's inconvenient, protects every future decision made from it.
+
+**Disagreement is fine. Staying open is the hard part.** I said I'd accept the decision, and I meant it. But accepting a decision isn't the same as understanding it. Going back the next day and talking it through is what actually changed my mind.
+
+My manager ended the original thread by thanking everyone for the debate and saying he was open to being convinced with evidence. That made it easy to come back to. I'm glad I did, because I learned more from being wrong about this than I would have from winning the argument.
