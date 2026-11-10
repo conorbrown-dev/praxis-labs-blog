@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - 'src/pages/resume.astro'
+      - 'src/pages/resume-payments.astro'
       - 'scripts/generate-resume-pdf.mjs'
       - '.github/workflows/generate-resume-pdf.yml'
   workflow_dispatch:
@@ -41,23 +42,26 @@ jobs:
         run: |
           npm run build
           node scripts/generate-resume-pdf.mjs
+          node scripts/generate-resume-pdf.mjs /resume-payments public/conor-brown-resume-payments.pdf
           timeout 240s node scripts/audit-site.mjs
       - name: Publish PDF as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: portfolio-resume-pdf
-          path: public/conor-brown-resume.pdf
+          path: |
+            public/conor-brown-resume.pdf
+            public/conor-brown-resume-payments.pdf
       - name: Commit regenerated PDF back to the branch
         if: github.event_name != 'pull_request'
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/conor-brown-resume.pdf
+          git add public/conor-brown-resume.pdf public/conor-brown-resume-payments.pdf
           if git diff --cached --quiet; then
             echo "PDF unchanged; nothing to commit."
           else
-            git commit -m "Regenerate résumé PDF"
+            git commit -m "Regenerate résumé PDFs"
             git pull --rebase -X theirs origin "$GITHUB_REF_NAME"
             git push
           fi

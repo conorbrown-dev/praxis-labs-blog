@@ -6,8 +6,10 @@ import { mkdir, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const PORT = '44321';
-const URL = `http://127.0.0.1:${PORT}/resume`;
-const outputPath = resolve('public/conor-brown-resume.pdf');
+// Optional args: route and output file, e.g. `node scripts/generate-resume-pdf.mjs /resume-payments public/conor-brown-resume-payments.pdf`
+const ROUTE = process.argv[2] ?? '/resume';
+const URL = `http://127.0.0.1:${PORT}${ROUTE}`;
+const outputPath = resolve(process.argv[3] ?? 'public/conor-brown-resume.pdf');
 await mkdir(resolve('public'), { recursive: true });
 
 const preview = spawn('npm', ['run', 'preview', '--', '--host', '127.0.0.1', '--port', PORT], {
