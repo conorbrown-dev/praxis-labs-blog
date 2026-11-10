@@ -38,7 +38,7 @@ try {
     throw new Error('Resume heading missing');
   }
   const text = await page.locator('main').innerText();
-  for (const required of ['MIRATECH', 'IXOPAY', 'MissGroup', 'carllbrown87@gmail.com']) {
+  for (const required of ['MIRATECH', 'IXOPAY', 'MissGroup', 'conorbrown.dev@gmail.com']) {
     if (!text.includes(required)) throw new Error(`Resume missing: ${required}`);
   }
   await page.pdf({ path: outputPath, format: 'Letter', printBackground: true, preferCSSPageSize: true });
