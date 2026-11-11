@@ -152,6 +152,25 @@ A controller accepts a request, calls one application service or handler, and re
 **Why:** Logic in a controller cannot be reused or unit tested without HTTP, and it spreads business decisions across layers.
 
 ```csharp
+// Don't: validation, ID comparison and failure branching live in the controller
+[HttpPut("{id}")]
+public async Task<IActionResult> Update(int id, UpdateComponentRequest request)
+{
+    if (id != request.Id)
+        return BadRequest("Id mismatch");
+
+    if (string.IsNullOrWhiteSpace(request.Description))
+        return BadRequest("Description is required");
+
+    var result = await _componentService.UpdateAsync(id, request);
+    if (result.IsFailure)
+        return result.Error == "NotFound" ? NotFound() : StatusCode(500);
+
+    return Ok(result.Value);
+}
+```
+
+```csharp
 // Do
 [HttpPut("{id}")]
 public async Task<IActionResult> Update(int id, UpdateComponentRequest request)
@@ -168,12 +187,76 @@ Do not add attributes or return types the framework already provides.
 - Use primary constructors for dependency injection where the language version supports them.
 - Do not null-check injected dependencies. Container construction fails on missing registrations.
 
+```csharp
+// Don't: restating what the framework already does
+[ApiController]
+[Route("api/components")]
+public class ComponentsController : ControllerBase
+{
+    private readonly IComponentService _componentService;
+
+    public ComponentsController(IComponentService componentService)
+    {
+        _componentService = componentService
+            ?? throw new ArgumentNullException(nameof(componentService));
+    }
+
+    [HttpPost]
+    public async Task<ActionResult<ComponentDto>> Create([FromBody] CreateComponentRequest request)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        return Ok(await _componentService.CreateAsync(request));
+    }
+}
+```
+
+```csharp
+// Do: primary constructor, no redundant attributes, no manual ModelState check
+[ApiController]
+[Route("api/components")]
+public class ComponentsController(IComponentService componentService) : ControllerBase
+{
+    [HttpPost]
+    public async Task<IActionResult> Create(CreateComponentRequest request)
+        => Ok(await componentService.CreateAsync(request));
+}
+```
+
 ### ARCH-03: Validate upstream, trust downstream
 **Default: Must**
 
 Validate input shape (required, range, format, non-empty) at the boundary using data annotations, a validator, or a validation pipeline. Validate business rules inside the domain. Services and handlers can then assume valid input and should not repeat null, empty, or whitespace checks.
 
 **Why:** Scattered validation hides which rules actually exist and invites inconsistent behavior. Defensive checks in services often cover for bad data that should be fixed at its source.
+
+```csharp
+// Do: the shape of the input is validated once, at the boundary
+public sealed record CreateComponentRequest(
+    [property: Required, StringLength(200)] string Name,
+    [property: Range(1, int.MaxValue)] int CategoryId);
+
+// The service can assume Name is present and CategoryId is positive.
+// Business rules (for example "names must be unique within a category") are enforced by the domain.
+public async Task<ComponentDto> CreateAsync(CreateComponentRequest request, CancellationToken ct)
+{
+    var component = Component.Create(request.Name, request.CategoryId);
+    await _components.CreateAsync(component, ct);
+    return component.ToDto();
+}
+```
+
+```csharp
+// Don't: repeat shape checks in the service
+public async Task<ComponentDto> CreateAsync(CreateComponentRequest request, CancellationToken ct)
+{
+    if (request is null) throw new ArgumentNullException(nameof(request));
+    if (string.IsNullOrWhiteSpace(request.Name)) throw new ArgumentException("Name is required");
+    if (request.CategoryId <= 0) throw new ArgumentException("CategoryId must be positive");
+    // ...
+}
+```
 
 ### ARCH-04: Business logic lives on domain objects
 **Default: Should**
@@ -182,12 +265,65 @@ Put behavior next to the data it operates on, for example `component.ChangeDescr
 
 **Why:** Self-contained domain objects are easier to reason about, test, and change than logic spread across helpers.
 
+```csharp
+// Don't: behavior in a static helper, data in a bag of public setters
+public static class ComponentHelper
+{
+    public static void ChangeDescription(Component component, string description)
+    {
+        if (component.IsRetired)
+            throw new InvalidOperationException("Retired components cannot be changed.");
+
+        component.Description = description;
+    }
+}
+```
+
+```csharp
+// Do: the behavior sits on the object that owns the data
+public sealed class Component
+{
+    public string Description { get; private set; } = string.Empty;
+    public bool IsRetired { get; private set; }
+
+    public void ChangeDescription(string description)
+    {
+        if (IsRetired)
+            throw new DomainException("Retired components cannot be changed.");
+
+        Description = description;
+    }
+}
+
+// The use case loads, calls the behavior, and lets the repository persist the result
+var component = await _components.GetAsync(id, ct);
+component.ChangeDescription(request.Description);
+await _components.SaveAsync(component, ct);
+```
+
 ### ARCH-05: Do not expose domain or EF entities across boundaries
 **Default: Must**
 
 Map entities to DTOs in the application layer. Never return entities from a service or controller. Do not configure serializers to ignore reference cycles (`ReferenceHandler.IgnoreCycles`) to make entity serialization work. Fix the cause by returning DTOs.
 
 **Why:** Returning entities leaks data to clients, produces unpredictable payload sizes, and couples the database shape to the API.
+
+```csharp
+// Don't: returns the EF entity (and every navigation property it drags along)
+public async Task<Component> GetAsync(int id, CancellationToken ct)
+    => await _components.GetAsync(id, ct);
+```
+
+```csharp
+// Do: map to a DTO in the application layer and return only what the client needs
+public sealed record ComponentDto(int Id, string Name, string Description);
+
+public async Task<ComponentDto> GetAsync(int id, CancellationToken ct)
+{
+    var component = await _components.GetAsync(id, ct);
+    return new ComponentDto(component.Id, component.Name, component.Description);
+}
+```
 
 ### ARCH-06: Respect layer dependency direction
 **Default: Must**
@@ -196,6 +332,25 @@ Map entities to DTOs in the application layer. Never return entities from a serv
 - DTOs, requests, responses, and paged results live in the application layer, not the domain layer.
 - Database parameters and infrastructure types do not appear in domain models or inputs.
 - Calls to stored procedures belong behind a generic infrastructure API, not scattered through application or domain classes.
+
+```text
+src/
+  Api/             Controllers, auth attributes
+  Application/     Services, validators, DTOs, requests, responses, paged results
+  Domain/          Entities, business rules, domain exceptions (references nothing)
+  Infrastructure/  Repositories, stored procedure access, external services
+```
+
+```xml
+<!-- Domain.csproj: no ProjectReference at all -->
+
+<!-- Application.csproj -->
+<ProjectReference Include="..\Domain\Domain.csproj" />
+
+<!-- Infrastructure.csproj: points inward at Application and Domain -->
+<ProjectReference Include="..\Application\Application.csproj" />
+<ProjectReference Include="..\Domain\Domain.csproj" />
+```
 
 ### ARCH-07: Repositories fetch and write; they do not decide
 **Default: Should**
@@ -207,10 +362,58 @@ Map entities to DTOs in the application layer. Never return entities from a serv
 - Use `Create` for a new aggregate and `Add` for attaching a child to a parent.
 - Return a purpose-built type instead of a tuple. A tuple can only grow by breaking every caller.
 
+```csharp
+// Don't: the repository picks the sort, returns a DTO, and hands back a tuple
+Task<(List<ComponentDto> Items, int Total)> GetComponentsSortedByNameAsync(int parentId);
+```
+
+```csharp
+// Do: return entities and let the caller decide ordering and shape
+Task<IReadOnlyList<Component>> GetByParentAsync(int parentId, CancellationToken ct);
+
+// Do: when a result needs more than one value, use a purpose-built type
+public sealed record ComponentPage(IReadOnlyList<Component> Items, int TotalCount);
+Task<ComponentPage> GetPageAsync(ComponentPageQuery query, CancellationToken ct);
+
+// Do: Create for a new aggregate, Add for attaching a child to its parent
+Task CreateAsync(Product product, CancellationToken ct);
+Task AddComponentAsync(int productId, Component component, CancellationToken ct);
+```
+
 ### ARCH-08: Services do not depend on other services
 **Default: Should**
 
 Depend on a repository, or let the caller orchestrate. Service-to-service calls create hidden workflows, tight coupling, and implicit dependencies.
+
+```csharp
+// Don't: one service quietly triggers two others, so placing an order hides a workflow
+public sealed class OrderService(
+    IPricingService pricing,
+    IInventoryService inventory,
+    IOrderRepository orders)
+{
+    public async Task PlaceAsync(PlaceOrderRequest request, CancellationToken ct)
+    {
+        var price = await pricing.QuoteAsync(request, ct);
+        await inventory.ReserveAsync(request, ct);
+        // ...
+    }
+}
+```
+
+```csharp
+// Do: one use case owns the workflow and depends on repositories, so every step is visible here
+public sealed class PlaceOrderUseCase(IProductRepository products, IOrderRepository orders)
+{
+    public async Task<OrderDto> PlaceAsync(PlaceOrderRequest request, CancellationToken ct)
+    {
+        var product = await products.GetAsync(request.ProductId, ct);
+        var order = Order.Place(product, request.Quantity);   // pricing and stock rules live in the domain
+        await orders.CreateAsync(order, ct);
+        return order.ToDto();
+    }
+}
+```
 
 ### ARCH-09: Keep new slices scoped
 **Default: Consider**
@@ -228,15 +431,90 @@ When something unexpected happens, throw. A global exception handler logs it (fo
 
 **Why:** Swallowed failures turn bugs into mysteries. A loud failure is logged once, in one place, and fixed.
 
+```csharp
+// Don't: swallow the failure and return an empty list
+public async Task<IReadOnlyList<ComponentDto>> GetAsync(int productId, CancellationToken ct)
+{
+    try
+    {
+        var components = await _components.GetByParentAsync(productId, ct);
+        return components.Select(c => c.ToDto()).ToList();
+    }
+    catch (Exception)
+    {
+        return [];
+    }
+}
+```
+
+```csharp
+// Do: throw, and let the global handler log it once and return a problem response
+public async Task<ProductDto> GetAsync(int productId, CancellationToken ct)
+{
+    var product = await _products.GetAsync(productId, ct)
+        ?? throw new NotFoundException(nameof(Product), productId);
+
+    return product.ToDto();
+}
+```
+
 ### ERR-02: Do not use try/catch as flow control
 **Default: Should**
 
 Catch an exception only to handle a specific, recoverable condition. Do not use it to choose between code paths, for example "try the new path, catch and fall back to the old one." Make the alternatives explicit methods and let the caller decide.
 
+```csharp
+// Don't: a try/catch decides which code path runs
+IReadOnlyList<SearchHit> hits;
+try
+{
+    hits = await _search.SearchV6Async(query);
+}
+catch
+{
+    hits = await _search.SearchLegacyAsync(query);
+}
+```
+
+```csharp
+// Do: catch one specific, recoverable condition and handle it deliberately
+try
+{
+    await _gateway.CaptureAsync(payment, ct);
+}
+catch (GatewayTimeoutException)
+{
+    await _payments.MarkPendingAsync(payment.Id, ct);
+}
+```
+
 ### ERR-03: Use the Result pattern only where the backend must branch
 **Default: Should**
 
 Use a result object when a method has expected, distinguishable outcomes that the calling code must handle, such as a primary path with a fallback. Do not return result objects up to controllers only to translate them into status codes, and do not send them to the frontend. In those cases throw a domain or use-case exception and let the global handler respond.
+
+```csharp
+// Don't: a Result travels up to the controller only to become a status code
+public async Task<Result<ComponentDto>> GetAsync(int id, CancellationToken ct) { /* ... */ }
+
+[HttpGet("{id}")]
+public async Task<IActionResult> Get(int id, CancellationToken ct)
+{
+    var result = await _componentService.GetAsync(id, ct);
+    return result.IsSuccess ? Ok(result.Value) : NotFound(result.Error);
+}
+```
+
+```csharp
+// Do: throw a use-case exception and let the global handler translate it
+public async Task<ComponentDto> GetAsync(int id, CancellationToken ct)
+{
+    var component = await _components.GetAsync(id, ct)
+        ?? throw new NotFoundException(nameof(Component), id);
+
+    return component.ToDto();
+}
+```
 
 ```csharp
 // Do: explicit paths, no hidden branching
@@ -250,6 +528,42 @@ if (result.IsFailure)
 
 Exception messages, stack traces, and exception types are not part of any API response. They help attackers and they leak implementation details. Return a standard problem response and log the details server-side.
 
+```csharp
+// Don't: exception text and type end up in the response body
+catch (Exception ex)
+{
+    return StatusCode(500, ex.ToString());
+}
+```
+
+```csharp
+// Do: one global handler logs the details server-side and returns a standard problem response
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+// ...
+app.UseExceptionHandler();
+
+public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
+{
+    public async ValueTask<bool> TryHandleAsync(
+        HttpContext context, Exception exception, CancellationToken ct)
+    {
+        var (status, title) = exception switch
+        {
+            NotFoundException => (StatusCodes.Status404NotFound, "Resource not found"),
+            _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred")
+        };
+
+        if (status == StatusCodes.Status500InternalServerError)
+            logger.LogError(exception, "Unhandled exception");
+
+        context.Response.StatusCode = status;
+        await context.Response.WriteAsJsonAsync(new ProblemDetails { Status = status, Title = title }, ct);
+        return true;
+    }
+}
+```
+
 ---
 
 ## Types and contracts
@@ -260,6 +574,32 @@ Exception messages, stack traces, and exception types are not part of any API re
 Represent state, modes, sort fields, and flags with enums. Do not use single-character codes, magic strings, or free-form sort expressions. If the database needs a string, convert at the data boundary.
 
 **Why:** Enums are self-documenting, validated by the compiler, and constrain what callers can send. Sort enums can also be stacked and validated easily.
+
+```csharp
+// Don't: magic strings and a free-form sort expression
+public Task<List<ComponentDto>> SearchAsync(string status, string sortBy);
+// callers pass "A", "I", "name desc", ...
+```
+
+```csharp
+// Do: enums say what is allowed, and the compiler checks it
+public enum ComponentStatus { Active, Inactive, Retired }
+public enum ComponentSortField { Name, CreatedAt, Status }
+
+public sealed record ComponentQuery(
+    ComponentStatus? Status,                       // null means "no status filter"
+    ComponentSortField SortBy = ComponentSortField.Name,
+    bool Descending = false);
+
+// Convert at the data boundary only, if a legacy column needs the old code
+static string ToLegacyCode(ComponentStatus status) => status switch
+{
+    ComponentStatus.Active => "A",
+    ComponentStatus.Inactive => "I",
+    ComponentStatus.Retired => "R",
+    _ => throw new ArgumentOutOfRangeException(nameof(status))
+};
+```
 
 ### TYPE-02: Avoid ambiguous nullability
 **Default: Should**
@@ -272,10 +612,45 @@ Represent state, modes, sort fields, and flags with enums. Do not use single-cha
 
 **Why:** Nullable collections and values spread repetitive null checks through the codebase and hide what a missing value means.
 
+```csharp
+// Don't: a nullable collection and a nullable bool that secretly has three states
+public sealed class ComponentDto
+{
+    public List<TagDto>? Tags { get; set; }
+    public bool? IsApproved { get; set; }   // null? false? "not reviewed yet"?
+}
+```
+
+```csharp
+// Do: collections are never null, and a three-way state is an enum
+public enum ApprovalState { Pending, Approved, Rejected }
+
+public sealed record ComponentDto(
+    int Id,
+    string Name,
+    IReadOnlyList<TagDto> Tags,        // empty when there are none, never null
+    ApprovalState Approval);
+```
+
 ### TYPE-03: Contracts must carry intent
 **Default: Should**
 
 A response must let the client distinguish "not requested" from "requested and empty." The backend contract serves the frontend's needs. If the frontend has to parse, infer, or reassemble data to compensate, fix the contract.
+
+```csharp
+// Don't: an empty list could mean "not requested" or "requested, and there are none"
+public sealed record ProductDto(int Id, string Name, IReadOnlyList<ComponentDto> Components);
+```
+
+```csharp
+// Do: let the client tell the two cases apart
+public sealed record ComponentsSection(bool WasRequested, IReadOnlyList<ComponentDto> Items)
+{
+    public static ComponentsSection NotRequested { get; } = new(false, []);
+}
+
+public sealed record ProductDto(int Id, string Name, ComponentsSection Components);
+```
 
 ### TYPE-04: Follow the team's language conventions
 **Default: Consider**
@@ -286,6 +661,31 @@ A response must let the client distinguish "not requested" from "requested and e
 - Move repeated `using` directives to global usings.
 - Configure brace style and formatting in `.editorconfig` so it is enforced by tooling, not review.
 
+```csharp
+// Do: records for DTOs, sealed classes, ILogger<T>, Async suffix, cancellation tokens
+public sealed record CreateComponentRequest(string Name, int CategoryId);
+
+public sealed class ComponentService(
+    ILogger<ComponentService> logger,
+    IComponentRepository components)
+{
+    public async Task<ComponentDto> GetAsync(int id, CancellationToken ct)
+    {
+        var component = await components.GetAsync(id, ct);
+        logger.LogDebug("Loaded component {ComponentId}", id);
+        return component.ToDto();
+    }
+}
+```
+
+```ini
+# .editorconfig: let tooling enforce style so review does not have to
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_prefer_braces = true:warning
+dotnet_style_predefined_type_for_locals_parameters_members = true:warning
+```
+
 ---
 
 ## Code design and readability
@@ -295,10 +695,54 @@ A response must let the client distinguish "not requested" from "requested and e
 
 A method does one job. Use early exits to reduce nesting, split distinct paths into separate methods, and move unrelated work out. If describing what a method does needs "and," split it.
 
+```csharp
+// Don't: nested, with the real work buried at the bottom
+public decimal GetDiscount(Customer customer)
+{
+    decimal discount = 0;
+    if (customer.IsActive)
+    {
+        if (customer.Orders.Count > 10)
+        {
+            discount = 0.1m;
+        }
+    }
+    return discount;
+}
+```
+
+```csharp
+// Do: early exits keep the happy path flat
+public decimal GetDiscount(Customer customer)
+{
+    if (!customer.IsActive) return 0;
+    if (customer.Orders.Count <= 10) return 0;
+
+    return 0.1m;
+}
+```
+
 ### CODE-02: The caller decides
 **Default: Should**
 
 Do not hide a decision inside a method with a silent short-circuit or a boolean flag that selects behavior. Put the check in the caller so it is clear whether an action happened, or split the method into two with clear names.
+
+```csharp
+// Don't: a flag and a silent return hide whether anything happened
+public async Task SendReminderAsync(Invoice invoice, bool force, CancellationToken ct)
+{
+    if (!force && invoice.ReminderSentAt is not null)
+        return;
+
+    await _email.SendAsync(invoice.CustomerEmail, "Payment reminder", ct);
+}
+```
+
+```csharp
+// Do: the caller makes the decision, and the method does exactly one thing
+if (invoice.NeedsReminder())
+    await _reminders.SendAsync(invoice, ct);
+```
 
 ### CODE-03: Make intent visible
 **Default: Should**
@@ -309,15 +753,89 @@ Do not hide a decision inside a method with a silent short-circuit or a boolean 
 - Name methods for what they do. Avoid vague verbs such as "Handle."
 - Comments explain why, not what.
 
+```csharp
+// Don't: a dense condition with unexplained literals
+if (user.Role == "admin" || (user.Department == "finance" && !user.IsContractor && order.Total < 5000))
+    Approve(order);
+```
+
+```csharp
+// Do: name the pieces so the condition reads like the business rule
+private const decimal FinanceApprovalLimit = 5000m;
+
+var isAdmin = user.Role == UserRole.Admin;
+var isFinanceStaffWithinLimit = user.Department == Department.Finance
+    && !user.IsContractor
+    && order.Total < FinanceApprovalLimit;
+
+if (isAdmin || isFinanceStaffWithinLimit)
+    Approve(order);
+
+// Do: say what you want, not how to loop for it
+var overdueIds = invoices
+    .Where(i => i.DueDate < asOf && !i.IsPaid)
+    .Select(i => i.Id)
+    .ToList();
+```
+
 ### CODE-04: Remove duplication deliberately
 **Default: Should**
 
 Consolidate identical branches and getters into one reusable expression. Duplication kept on purpose, such as preserving old behavior behind a feature toggle, is acceptable when it is commented and has a ticket to remove it.
 
+```csharp
+// Don't: identical branches
+if (type == ComponentType.Valve) return component.Name.Trim().ToUpperInvariant();
+if (type == ComponentType.Pump)  return component.Name.Trim().ToUpperInvariant();
+return component.Name;
+```
+
+```csharp
+// Do: one expression
+if (type is ComponentType.Valve or ComponentType.Pump)
+    return component.Name.Trim().ToUpperInvariant();
+
+return component.Name;
+
+// Duplication on purpose is fine when it is commented and has a ticket to remove it
+// TODO(TECH-123): delete the legacy calculation once the new pricing toggle is on everywhere
+var price = pricingToggle.IsEnabled ? CalculatePrice(order) : CalculateLegacyPrice(order);
+```
+
 ### CODE-05: Prefer testable seams over statics
 **Default: Should**
 
 Static classes that hold domain logic or perform I/O cannot be mocked, replaced, or verified, and they tie every caller to one implementation. Pure, stateless helpers are fine. When logic needs behavior, move it to a domain object or inject it.
+
+```csharp
+// Don't: a static class that does I/O cannot be replaced or verified in a test
+public static class PriceCalculator
+{
+    public static decimal Quote(int productId)
+    {
+        using var connection = new SqlConnection(Settings.ConnectionString);
+        // ...query, calculate, return
+    }
+}
+```
+
+```csharp
+// Fine: pure and stateless, with no I/O
+public static class Slug
+{
+    public static string From(string text) => text.Trim().ToLowerInvariant().Replace(' ', '-');
+}
+
+// Do: inject the dependency so a test can replace it
+public sealed class PricingService(IPriceListRepository priceLists)
+{
+    public async Task<decimal> QuoteAsync(int productId, CancellationToken ct)
+    {
+        var priceList = await priceLists.GetForProductAsync(productId, ct);
+        return priceList.Quote();   // the calculation lives on the domain object
+    }
+}
+```
 
 ---
 
@@ -328,20 +846,96 @@ Static classes that hold domain logic or perform I/O cannot be mocked, replaced,
 
 User identity, roles, and ownership come from authenticated claims, not request bodies or parameters. Anything the client sends can be altered.
 
+```csharp
+// Don't: the client says who it is
+public sealed record CreateNoteRequest(int UserId, string Text);
+```
+
+```csharp
+// Do: identity comes from the authenticated claims
+public interface ICurrentUser
+{
+    int Id { get; }   // read from the authenticated principal, never from the request
+}
+
+public sealed record CreateNoteRequest(string Text);
+
+public async Task<NoteDto> CreateAsync(CreateNoteRequest request, CancellationToken ct)
+{
+    var note = Note.Create(currentUser.Id, request.Text);
+    await _notes.CreateAsync(note, ct);
+    return note.ToDto();
+}
+```
+
 ### SEC-02: Secure by default
 **Default: Must**
 
 Apply `[Authorize]` at the controller class level so every endpoint is protected by default. Opt out explicitly and only where required.
+
+```csharp
+// Do: protected by default at the class level, with an explicit and narrow opt-out
+[Authorize]
+[ApiController]
+[Route("api/components")]
+public class ComponentsController(IComponentService componentService) : ControllerBase
+{
+    [HttpGet("{id}")]
+    public async Task<IActionResult> Get(int id)
+        => Ok(await componentService.GetAsync(id));
+
+    [AllowAnonymous]
+    [HttpGet("health")]
+    public IActionResult Health() => Ok();
+}
+```
 
 ### SEC-03: Verify against stored state
 **Default: Must**
 
 Compare client input with the entity loaded through the application and repository layers, never only with other values from the same request. For example, checking that a route ID equals an ID in the body proves nothing about what the caller is allowed to change.
 
+```csharp
+// Don't: comparing two values from the same request proves nothing
+if (id != request.Id)
+    return BadRequest();
+```
+
+```csharp
+// Do: load the stored entity and check the caller against it
+var component = await _components.GetAsync(id, ct)
+    ?? throw new NotFoundException(nameof(Component), id);
+
+if (component.OwnerId != currentUser.Id)
+    throw new ForbiddenException();
+
+component.ChangeDescription(request.Description);
+await _components.SaveAsync(component, ct);
+```
+
 ### SEC-04: Keep secrets out of source and out of sight
 **Default: Must**
 
 Secrets, connection strings, and live keys stay in the secret store and on the servers that need them. They do not belong in PR descriptions, local configuration, repositories, or command-line arguments, where process listings can expose them.
+
+```csharp
+// Don't: a live secret in source
+var connectionString = "Server=prod-sql;Database=App;User Id=app;Password=<secret>;";
+```
+
+```csharp
+// Do: read it from configuration that is backed by a secret store
+var connectionString = builder.Configuration.GetConnectionString("Default")
+    ?? throw new InvalidOperationException("Connection string 'Default' is not configured.");
+
+// For example, with Azure Key Vault as a configuration source
+builder.Configuration.AddAzureKeyVault(new Uri(vaultUri), new DefaultAzureCredential());
+```
+
+```bash
+# Don't: secrets as command-line arguments, where a process listing can show them
+dotnet run --ConnectionStrings:Default "Server=prod-sql;Password=<secret>"
+```
 
 ---
 
@@ -352,25 +946,111 @@ Secrets, connection strings, and live keys stay in the secret store and on the s
 
 New tables include `CreatedAt` and `UpdatedAt` defaulting to the current UTC time, so the application does not set them or handle nulls. Record who made changes with `CreatedByUserId` and `UpdatedByUserId`, and store the username as well, since usernames can change.
 
+```sql
+CREATE TABLE dbo.WorkflowRule
+(
+    WorkflowRuleId    int IDENTITY(1, 1) NOT NULL PRIMARY KEY,
+    Name              nvarchar(200)      NOT NULL,
+
+    CreatedAt         datetime2          NOT NULL CONSTRAINT DF_WorkflowRule_CreatedAt DEFAULT (SYSUTCDATETIME()),
+    UpdatedAt         datetime2          NOT NULL CONSTRAINT DF_WorkflowRule_UpdatedAt DEFAULT (SYSUTCDATETIME()),
+    CreatedByUserId   int                NOT NULL,
+    CreatedByUserName nvarchar(100)      NOT NULL,   -- usernames can change, so keep what it was at the time
+    UpdatedByUserId   int                NOT NULL,
+    UpdatedByUserName nvarchar(100)      NOT NULL
+);
+```
+
 ### DB-02: Clear, consistent names
 **Default: Should**
 
 Name foreign keys to match what they reference (for example `WorkflowRuleId`). Name parent and child tables for what they are. Use enums instead of cryptic single-character indicators, translating at the boundary if a legacy system needs the old value.
+
+```sql
+-- Don't: vague names and a cryptic single-character flag
+CREATE TABLE dbo.Item
+(
+    Id       int IDENTITY(1, 1) PRIMARY KEY,
+    ParentId int NOT NULL,
+    Flag     char(1) NOT NULL      -- 'Y', 'N', 'P' ...
+);
+```
+
+```sql
+-- Do: names that say what they are, foreign keys named for what they reference, an enum-backed column
+CREATE TABLE dbo.WorkflowRuleCondition
+(
+    WorkflowRuleConditionId int IDENTITY(1, 1) NOT NULL PRIMARY KEY,
+    WorkflowRuleId          int     NOT NULL
+        CONSTRAINT FK_WorkflowRuleCondition_WorkflowRule REFERENCES dbo.WorkflowRule (WorkflowRuleId),
+    Operator                tinyint NOT NULL      -- maps to the ConditionOperator enum in code
+);
+```
 
 ### DB-03: Choose the lightest structure
 **Default: Consider**
 
 If a set of values is fixed in code, use an enum or constrained column rather than a lookup table. Remove columns that nothing uses, and question columns that imply behavior the application does not have.
 
+```sql
+-- Don't: a lookup table for values that are fixed in code
+CREATE TABLE dbo.ComponentStatus (ComponentStatusId int PRIMARY KEY, Name nvarchar(50) NOT NULL);
+```
+
+```sql
+-- Do: a constrained column, with the enum in code (Active = 0, Inactive = 1, Retired = 2)
+ALTER TABLE dbo.Component ADD Status tinyint NOT NULL
+    CONSTRAINT DF_Component_Status DEFAULT (0)
+    CONSTRAINT CK_Component_Status CHECK (Status IN (0, 1, 2));
+```
+
 ### DB-04: Put scripts in the right category
 **Default: Must**
 
 Re-runnable objects such as stored procedures go in the "Always" category. One-time changes go in "Once." The wrong category causes missed updates or repeated runs.
 
+```text
+Scripts/                                  (illustrative layout; names depend on your migration tool)
+  Once/
+    2026-11-11_AddWorkflowRuleTable.sql   One-time change. Runs once and is never edited afterwards.
+  Always/
+    usp_GetWorkflowRules.sql              Re-runnable object. Safe to run on every deploy.
+```
+
+```sql
+-- Always/usp_GetWorkflowRules.sql
+CREATE OR ALTER PROCEDURE dbo.usp_GetWorkflowRules
+    @ParentId int
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT WorkflowRuleId, Name, CreatedAt
+    FROM dbo.WorkflowRule
+    WHERE ParentId = @ParentId;
+END
+```
+
 ### DB-05: Bound the work
 **Default: Consider**
 
 Queries that load all rows for a parent should have a date or count limit unless the set is known to be small. Pass cancellation tokens to repository calls.
+
+```csharp
+// Don't: loads every audit row ever written for the parent
+var entries = await db.AuditEntries
+    .Where(a => a.ParentId == parentId)
+    .ToListAsync();
+```
+
+```csharp
+// Do: bound by date and count, and pass the cancellation token
+var entries = await db.AuditEntries
+    .Where(a => a.ParentId == parentId && a.CreatedAt >= since)
+    .OrderByDescending(a => a.CreatedAt)
+    .Take(200)
+    .ToListAsync(ct);
+```
 
 ---
 
@@ -381,25 +1061,149 @@ Queries that load all rows for a parent should have a date or count limit unless
 
 Components render and delegate. Move non-presentation logic to hooks, utilities, or services. Split large pages and dialogs into smaller components. A file that has grown past roughly a thousand lines is a signal to refactor.
 
+```tsx
+// Don't: one component fetches, reshapes and renders
+function ComponentList({ productId }: { productId: number }) {
+  const [items, setItems] = useState<ComponentDto[]>([]);
+  useEffect(() => {
+    fetch(`/api/products/${productId}/components`)
+      .then((r) => r.json())
+      .then((data) => setItems(data.filter((c: ComponentDto) => !c.isRetired)));
+  }, [productId]);
+
+  return <ul>{items.map((c) => <li key={c.id}>{c.name}</li>)}</ul>;
+}
+```
+
+```tsx
+// Do: a hook owns the data, and the component renders and delegates
+function ComponentList({ productId }: { productId: number }) {
+  const components = useComponents(productId);
+
+  return (
+    <ul>
+      {components.map((c) => (
+        <ComponentRow key={c.id} component={c} />
+      ))}
+    </ul>
+  );
+}
+```
+
 ### FE-02: No backend logic in the UI
 **Default: Must for new code**
 
 Do not implement backend concerns in the frontend, such as parsing a backend expression language, validating business rules, or reproducing server calculations. If the backend contract does not fit what the UI needs, change the contract. Duplicated backend logic couples the two sides tightly.
+
+```tsx
+// Don't: re-implement a server calculation in the browser
+const total = lines.reduce((sum, l) => sum + l.quantity * l.unitPrice * (1 - l.discountRate), 0);
+return <span>{total.toFixed(2)}</span>;
+```
+
+```tsx
+// Do: render what the API returns. If the contract is missing something the UI needs, change the contract.
+return <span>{order.total}</span>;
+```
 
 ### FE-03: Hooks fail loudly and trust their own data
 **Default: Should**
 
 Do not swallow errors and return empty arrays. Do not normalize data your own code wrote, for example storage entries. Parse it, type it, and let TypeScript catch shape errors before the write.
 
+```tsx
+// Don't: swallow the error and pretend there is simply no data
+export function useComponents(productId: number) {
+  const [components, setComponents] = useState<ComponentDto[]>([]);
+
+  useEffect(() => {
+    getComponents(productId)
+      .then(setComponents)
+      .catch(() => setComponents([]));
+  }, [productId]);
+
+  return components;
+}
+```
+
+```tsx
+// Do: let the failure surface (here, to the nearest error boundary)
+export function useComponents(productId: number) {
+  const [components, setComponents] = useState<ComponentDto[]>([]);
+  const [error, setError] = useState<Error>();
+
+  useEffect(() => {
+    getComponents(productId).then(setComponents).catch(setError);
+  }, [productId]);
+
+  if (error) throw error;
+  return components;
+}
+```
+
+```ts
+// Don't: re-normalize data your own code wrote
+const raw = JSON.parse(localStorage.getItem('filters') ?? '{}');
+const filters = { status: raw.status ?? 'all', tags: raw.tags ?? [] };
+
+// Do: type it once, at the single place that writes it
+type SavedFilters = { status: 'all' | 'open' | 'closed'; tags: string[] };
+
+export const saveFilters = (filters: SavedFilters) =>
+  localStorage.setItem('filters', JSON.stringify(filters));
+```
+
 ### FE-04: Use a form validation library
 **Default: Consider**
 
 Adopt a standard form validation library (for example Formik with Yup, or an equivalent) instead of hand-written validation in each form.
 
+```tsx
+import { Formik, Form, Field, ErrorMessage } from 'formik';
+import * as Yup from 'yup';
+
+const schema = Yup.object({
+  name: Yup.string().required('Name is required').max(200),
+  categoryId: Yup.number().required().positive(),
+});
+
+export function CreateComponentForm({ onSubmit }: { onSubmit: (v: CreateComponentRequest) => void }) {
+  return (
+    <Formik initialValues={{ name: '', categoryId: 0 }} validationSchema={schema} onSubmit={onSubmit}>
+      <Form>
+        <Field name="name" />
+        <ErrorMessage name="name" />
+        <button type="submit">Create</button>
+      </Form>
+    </Formik>
+  );
+}
+```
+
 ### FE-05: Keep types honest
 **Default: Should**
 
 Remove non-null assertions (`!`) by making argument types accurate, and default values to sane empties instead of `null` or `undefined` where the UI would otherwise need repeated checks.
+
+```tsx
+// Don't: assert away the problem and repeat the null checks
+const name = props.component!.name;
+const tags = props.tags ?? [];
+```
+
+```tsx
+// Do: make the types accurate and default once, at the edge
+type Props = { component: ComponentDto; tags?: string[] };
+
+function ComponentCard({ component, tags = [] }: Props) {
+  return (
+    <article>
+      <h3>{component.name}</h3>
+      {tags.map((t) => <span key={t}>{t}</span>)}
+    </article>
+  );
+}
+```
 
 ---
 
@@ -410,15 +1214,66 @@ Remove non-null assertions (`!`) by making argument types accurate, and default 
 
 Assertions must break when the behavior they cover breaks. Watch for mocks that always return success or "triggered," assertions that only check part of the outcome (for example the description but not the evaluated rule), and fixtures that cannot distinguish the right result from a wrong one.
 
+```csharp
+// Don't: the mock always says "triggered", so this passes whatever the rule really does
+rules.Setup(r => r.Evaluate(It.IsAny<Order>())).Returns(RuleResult.Triggered);
+Assert.NotNull(result);
+```
+
+```csharp
+// Do: use a fixture that can tell right from wrong, and assert the whole outcome
+var result = rule.Evaluate(new Order(total: 5001m));
+
+Assert.True(result.Triggered);
+Assert.Equal(rule.Id, result.RuleId);
+
+// ...and its counterpart, which must NOT trigger
+Assert.False(rule.Evaluate(new Order(total: 4999m)).Triggered);
+```
+
 ### TEST-02: Keep tests deterministic and decoupled
 **Default: Should**
 
 Do not use random values, current time, or framework-specific formatting in assertions. A failing test should be reproducible. Assert the meaning, not the exact string a library happens to produce.
 
+```csharp
+// Don't: depends on the real clock, so the result changes with when it runs
+var invoice = Invoice.Create();
+Assert.Equal(DateTime.UtcNow.Date, invoice.CreatedAt.Date);
+```
+
+```csharp
+// Do: inject a time source and assert the meaning
+var created = new DateTimeOffset(2026, 1, 15, 9, 0, 0, TimeSpan.Zero);
+var clock = new FakeTimeProvider(created);
+
+var invoice = Invoice.Create(clock.GetUtcNow());
+
+Assert.Equal(created, invoice.CreatedAt);
+```
+
 ### TEST-03: Parameterize repeated cases
 **Default: Consider**
 
 Combine near-identical tests with data-driven tests (for example `MemberData`) so each case is one row, not one method.
+
+```csharp
+public static IEnumerable<object[]> DiscountCases =>
+[
+    [0,  0m],
+    [10, 0m],
+    [11, 0.1m],
+];
+
+[Theory]
+[MemberData(nameof(DiscountCases))]
+public void Discount_depends_on_order_count(int orderCount, decimal expected)
+{
+    var customer = ActiveCustomerWithOrders(orderCount);
+
+    Assert.Equal(expected, discounts.GetDiscount(customer));
+}
+```
 
 ---
 
@@ -428,6 +1283,15 @@ Combine near-identical tests with data-driven tests (for example `MemberData`) s
 **Default: Consider**
 
 Create a branch in the shared repository off `develop` and open the PR back to `develop`. Personal forks or separate repositories add overhead and make collaboration harder.
+
+```bash
+git fetch origin
+git switch -c feature/workflow-rule-audit origin/develop
+
+# ...commit your work...
+
+git push -u origin feature/workflow-rule-audit   # then open the PR back to develop
+```
 
 ### PROC-02: Keep PRs focused
 **Default: Should**
