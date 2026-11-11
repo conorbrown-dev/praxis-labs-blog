@@ -1,0 +1,43 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { Content, frontmatter } from '../standards/architecture-standards.mdx';
+---
+
+<Layout title={`${frontmatter.title} | Conor Brown`} description={frontmatter.description}>
+	<main class="post standards">
+		<a href="/work">← Engineering</a>
+		<article class="mt-12">
+			<Content />
+		</article>
+	</main>
+</Layout>
+
+<script>
+	import mermaid from 'mermaid';
+
+	mermaid.initialize({
+		startOnLoad: false,
+		theme: 'base',
+		themeVariables: {
+			background: 'transparent',
+			primaryColor: '#172029',
+			primaryBorderColor: '#fa9a4c',
+			primaryTextColor: '#eaf0f2',
+			lineColor: '#fa9a4c',
+			secondaryColor: '#151022',
+			tertiaryColor: '#151022',
+			fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif'
+		},
+		flowchart: { useMaxWidth: true, htmlLabels: true }
+	});
+
+	const diagrams = [...document.querySelectorAll('pre[data-language="mermaid"]')].map((codeBlock) => {
+		const diagram = document.createElement('div');
+		diagram.className = 'mermaid';
+		diagram.textContent = codeBlock.textContent;
+		codeBlock.replaceWith(diagram);
+		return diagram;
+	});
+
+	if (diagrams.length) await mermaid.run({ nodes: diagrams });
+</script>
